@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import {
   StyleSheet,
   Text,
@@ -34,6 +34,7 @@ export default function App() {
   const { width } = useWindowDimensions();
   const isLargeScreen = width > 768;
   const [destinations, setDestinations] = useState([]);
+  const [allRawDestinations, setAllRawDestinations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [apiError, setApiError] = useState(false);
   const [isAdminMode, setIsAdminMode] = useState(false);
@@ -47,11 +48,6 @@ export default function App() {
   const [editingId, setEditingId] = useState("");
   const [formData, setFormData] = useState(DEFAULT_FORM_DATA);
   const [toasts, setToasts] = useState([]);
-  const [algoTab, setAlgoTab] = useState(null); // 'sequential' | 'binary' | 'selection' | 'insertion'
-  const [algoInput, setAlgoInput] = useState("");
-  const [algoResult, setAlgoResult] = useState(null);
-  const [algoLoading, setAlgoLoading] = useState(false);
-  const [sortedList, setSortedList] = useState([]);
 
   // Fungsi Helper Toast Notifikasi
   const showToast = (message, type = "success") => {
@@ -66,13 +62,13 @@ export default function App() {
   const fetchDestinations = async () => {
     setLoading(true);
     try {
-      const url = `${API_BASE_URL}/destinations?search=${encodeURIComponent(searchQuery)}&category=${encodeURIComponent(selectedCategory)}&sort=${sortBy}`;
+      const url = `${API_BASE_URL}/destinations`;
       const response = await fetch(url);
       if (!response.ok) {
         throw new Error("Gagal memuat data dari server");
       }
       const data = await response.json();
-      setDestinations(data);
+      setAllRawDestinations(data);
       setApiError(false);
     } catch (error) {
       console.error("API Error:", error);
@@ -154,30 +150,12 @@ export default function App() {
       },
     ];
 
-    let filtered = localData.filter((d) => {
-      const matchCat =
-        selectedCategory === "semua" ||
-        d.category.toLowerCase() === selectedCategory.toLowerCase();
-      const matchSearch =
-        d.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        d.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        d.location.toLowerCase().includes(searchQuery.toLowerCase());
-      return matchCat && matchSearch;
-    });
-
-    if (sortBy === "distance_asc")
-      filtered.sort((a, b) => a.distance - b.distance);
-    else if (sortBy === "cost_asc") filtered.sort((a, b) => a.cost - b.cost);
-    else if (sortBy === "cost_desc") filtered.sort((a, b) => b.cost - a.cost);
-    else if (sortBy === "facilities_desc")
-      filtered.sort((a, b) => b.facilities.length - a.facilities.length);
-
-    setDestinations(filtered);
+    setAllRawDestinations(localData);
   };
 
   useEffect(() => {
     fetchDestinations();
-  }, [searchQuery, selectedCategory, sortBy]);
+  }, []);
 
   // Aksi CRUD (Admin)
   const handleAddSubmit = async () => {
@@ -348,70 +326,207 @@ export default function App() {
     }
   };
 
-  //FUNGSI SORTING
-  const runSequentialSearch = async () => {
-    if (!algoInput) return;
-    setAlgoLoading(true);
-    setAlgoResult(null);
-    try {
-      const r = await fetch(
-        `${API_BASE_URL}/destinations/sequential-search?id=${encodeURIComponent(algoInput)}`,
-      );
-      setAlgoResult(
-        r.ok ? { data: await r.json(), found: true } : { found: false },
-      );
-    } catch {
-      setAlgoResult({ error: true });
-    } finally {
-      setAlgoLoading(false);
+  // ==========================================
+  // ALGORITMA PENCARIAN & PENGURUTAN (CLIENT-SIDE)
+  // ==========================================
+
+  // 1. Insertion Sort berdasarkan ID (kebutuhan Binary Search)
+  const insertionSortByID = (arr) => {
+    const data = [...arr];
+    for (let i = 1; i < data.length; i++) {
+      const key = data[i];
+      let j = i - 1;
+      while (j >= 0 && data[j].id.localeCompare(key.id, undefined, { numeric: true }) > 0) {
+        data[j + 1] = data[j];
+        j--;
+      }
+      data[j + 1] = key;
     }
+    return data;
   };
 
-  const runBinarySearch = async () => {
-    if (!algoInput) return;
-    setAlgoLoading(true);
-    setAlgoResult(null);
-    try {
-      const r = await fetch(
-        `${API_BASE_URL}/destinations/binary-search?id=${encodeURIComponent(algoInput)}`,
-      );
-      setAlgoResult(
-        r.ok ? { data: await r.json(), found: true } : { found: false },
-      );
-    } catch {
-      setAlgoResult({ error: true });
-    } finally {
-      setAlgoLoading(false);
+  // 2. Binary Search berdasarkan ID
+  const binarySearchByID = (arr, targetID) => {
+    let low = 0;
+    let high = arr.length - 1;
+    const cleanTarget = targetID.trim().toLowerCase();
+    while (low <= high) {
+      const mid = Math.floor((low + high) / 2);
+      const midID = arr[mid].id.toLowerCase();
+      if (midID === cleanTarget) {
+        return arr[mid];
+      } else if (midID < cleanTarget) {
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
     }
+    return null;
   };
 
-  const runSelectionSort = async () => {
-    setAlgoLoading(true);
-    setSortedList([]);
-    try {
-      const r = await fetch(`${API_BASE_URL}/destinations/selection-sort-cost`);
-      if (r.ok) setSortedList(await r.json());
-    } catch {
-      showToast("Gagal menghubungi server", "error");
-    } finally {
-      setAlgoLoading(false);
+  // 3. Sequential Search untuk pencarian kata kunci multi-kolom
+  const sequentialSearch = (arr, query) => {
+    const results = [];
+    const lowerQuery = query.toLowerCase().trim();
+    for (let i = 0; i < arr.length; i++) {
+      const d = arr[i];
+      const matchName = d.name && d.name.toLowerCase().includes(lowerQuery);
+      const matchDesc = d.description && d.description.toLowerCase().includes(lowerQuery);
+      const matchLoc = d.location && d.location.toLowerCase().includes(lowerQuery);
+      
+      let matchFac = false;
+      if (d.facilities) {
+        for (let j = 0; j < d.facilities.length; j++) {
+          if (d.facilities[j].toLowerCase().includes(lowerQuery)) {
+            matchFac = true;
+            break;
+          }
+        }
+      }
+      
+      let matchRide = false;
+      if (d.rides) {
+        for (let j = 0; j < d.rides.length; j++) {
+          if (d.rides[j].toLowerCase().includes(lowerQuery)) {
+            matchRide = true;
+            break;
+          }
+        }
+      }
+      
+      if (matchName || matchDesc || matchLoc || matchFac || matchRide) {
+        results.push(d);
+      }
     }
+    return results;
   };
 
-  const runInsertionSort = async () => {
-    setAlgoLoading(true);
-    setSortedList([]);
-    try {
-      const r = await fetch(
-        `${API_BASE_URL}/destinations/insertion-sort-distance`,
-      );
-      if (r.ok) setSortedList(await r.json());
-    } catch {
-      showToast("Gagal menghubungi server", "error");
-    } finally {
-      setAlgoLoading(false);
+  // 4. Selection Sort berdasarkan Biaya (Cost)
+  const selectionSortCost = (arr, order = "asc") => {
+    const data = [...arr];
+    const n = data.length;
+    for (let i = 0; i < n - 1; i++) {
+      let selectIdx = i;
+      for (let j = i + 1; j < n; j++) {
+        if (order === "asc") {
+          if (data[j].cost < data[selectIdx].cost) {
+            selectIdx = j;
+          }
+        } else {
+          if (data[j].cost > data[selectIdx].cost) {
+            selectIdx = j;
+          }
+        }
+      }
+      if (selectIdx !== i) {
+        const temp = data[i];
+        data[i] = data[selectIdx];
+        data[selectIdx] = temp;
+      }
     }
+    return data;
   };
+
+  // 5. Insertion Sort berdasarkan Jarak (Distance)
+  const insertionSortDistance = (arr, order = "asc") => {
+    const data = [...arr];
+    for (let i = 1; i < data.length; i++) {
+      const key = data[i];
+      let j = i - 1;
+      if (order === "asc") {
+        while (j >= 0 && data[j].distance > key.distance) {
+          data[j + 1] = data[j];
+          j--;
+        }
+      } else {
+        while (j >= 0 && data[j].distance < key.distance) {
+          data[j + 1] = data[j];
+          j--;
+        }
+      }
+      data[j + 1] = key;
+    }
+    return data;
+  };
+
+  // 6. Insertion Sort berdasarkan Jumlah Fasilitas
+  const insertionSortFacilities = (arr, order = "desc") => {
+    const data = [...arr];
+    for (let i = 1; i < data.length; i++) {
+      const key = data[i];
+      let j = i - 1;
+      const keyLen = key.facilities ? key.facilities.length : 0;
+      if (order === "asc") {
+        while (j >= 0 && (data[j].facilities ? data[j].facilities.length : 0) > keyLen) {
+          data[j + 1] = data[j];
+          j--;
+        }
+      } else {
+        while (j >= 0 && (data[j].facilities ? data[j].facilities.length : 0) < keyLen) {
+          data[j + 1] = data[j];
+          j--;
+        }
+      }
+      data[j + 1] = key;
+    }
+    return data;
+  };
+
+  // Memproses data secara lokal dengan algoritma Sequential, Binary, Selection, dan Insertion
+  const processedDestinations = useMemo(() => {
+    let result = [...allRawDestinations];
+
+    // 1. Filter Kategori
+    if (selectedCategory !== "semua") {
+      result = result.filter(
+        (d) => d.category.toLowerCase() === selectedCategory.toLowerCase()
+      );
+    }
+
+    // 2. Pencarian (Sequential Search atau Binary Search)
+    let searchUsed = "";
+    if (searchQuery.trim() !== "") {
+      const query = searchQuery.trim().toLowerCase();
+      // Binary search syaratnya input berupa format ID destinasi 'dest-X'
+      if (query.startsWith("dest-")) {
+        // Harus diurutkan berdasarkan ID dahulu (Insertion Sort) sebelum dicari (Binary Search)
+        const sortedByID = insertionSortByID(result);
+        const found = binarySearchByID(sortedByID, query);
+        result = found ? [found] : [];
+        searchUsed = "Binary Search (by ID)";
+      } else {
+        // Cari pakai Sequential Search
+        result = sequentialSearch(result, query);
+        searchUsed = "Sequential Search";
+      }
+    }
+
+    // 3. Pengurutan (Selection Sort atau Insertion Sort)
+    let sortUsed = "";
+    if (sortBy === "distance_asc") {
+      result = insertionSortDistance(result, "asc");
+      sortUsed = "Insertion Sort (Jarak Terdekat)";
+    } else if (sortBy === "distance_desc") {
+      result = insertionSortDistance(result, "desc");
+      sortUsed = "Insertion Sort (Jarak Terjauh)";
+    } else if (sortBy === "cost_asc") {
+      result = selectionSortCost(result, "asc");
+      sortUsed = "Selection Sort (Harga Termurah)";
+    } else if (sortBy === "cost_desc") {
+      result = selectionSortCost(result, "desc");
+      sortUsed = "Selection Sort (Harga Termahal)";
+    } else if (sortBy === "facilities_desc") {
+      result = insertionSortFacilities(result, "desc");
+      sortUsed = "Insertion Sort (Fasilitas Terlengkap)";
+    }
+
+    return { data: result, searchUsed, sortUsed };
+  }, [allRawDestinations, searchQuery, selectedCategory, sortBy]);
+
+  // Sinkronisasi data ke state destinations untuk rendering JSX
+  useEffect(() => {
+    setDestinations(processedDestinations.data);
+  }, [processedDestinations]);
 
   return (
     <View style={styles.appContainer}>
@@ -571,205 +686,17 @@ export default function App() {
             </View>
 
             {/* ALGORITMA VIEW */}
-            {/* ALGORITHM DEMO SECTION */}
-            <View style={styles.heroCard}>
-              <Text style={styles.modalDescTitle}>
-                🔬 Demo Algoritma Pencarian & Pengurutan
-              </Text>
-
-              {/* Tab buttons */}
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                style={{ marginBottom: 12 }}
-              >
-                {[
-                  { key: "sequential", label: "Sequential Search" },
-                  { key: "binary", label: "Binary Search" },
-                  { key: "selection", label: "Selection Sort" },
-                  { key: "insertion", label: "Insertion Sort" },
-                ].map((tab) => (
-                  <TouchableOpacity
-                    key={tab.key}
-                    style={[
-                      styles.categoryTabBtn,
-                      algoTab === tab.key && styles.categoryTabBtnActive,
-                      { marginRight: 8 },
-                    ]}
-                    onPress={() => {
-                      setAlgoTab(tab.key);
-                      setAlgoResult(null);
-                      setSortedList([]);
-                    }}
-                  >
-                    <Text
-                      style={[
-                        styles.categoryTabText,
-                        algoTab === tab.key && styles.categoryTabTextActive,
-                      ]}
-                    >
-                      {tab.label.toUpperCase()}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-
-              {/* Panel konten per tab */}
-              {algoTab === "sequential" && (
-                <View>
-                  <Text style={styles.cardDesc}>
-                    Mencari destinasi satu per satu dari awal.
-                  </Text>
-                  <View style={styles.searchBox}>
-                    <TextInput
-                      style={styles.searchInput}
-                      placeholder="Masukkan ID, contoh: dest-1"
-                      placeholderTextColor="#4b5563"
-                      value={algoInput}
-                      onChangeText={setAlgoInput}
-                    />
-                  </View>
-                  <TouchableOpacity
-                    style={styles.btnSave}
-                    onPress={runSequentialSearch}
-                  >
-                    <Text style={styles.btnSaveText}>🔍 Cari (Sequential)</Text>
-                  </TouchableOpacity>
-                </View>
-              )}
-
-              {algoTab === "binary" && (
-                <View>
-                  <Text style={styles.cardDesc}>
-                    Pencarian biner pada data terurut.
-                  </Text>
-                  <View style={styles.searchBox}>
-                    <TextInput
-                      style={styles.searchInput}
-                      placeholder="Masukkan ID, contoh: dest-2"
-                      placeholderTextColor="#4b5563"
-                      value={algoInput}
-                      onChangeText={setAlgoInput}
-                    />
-                  </View>
-                  <TouchableOpacity
-                    style={styles.btnSave}
-                    onPress={runBinarySearch}
-                  >
-                    <Text style={styles.btnSaveText}>🔍 Cari (Binary)</Text>
-                  </TouchableOpacity>
-                </View>
-              )}
-
-              {algoTab === "selection" && (
-                <View>
-                  <Text style={styles.cardDesc}>
-                    Urutkan semua destinasi dari biaya termurah.
-                  </Text>
-                  <TouchableOpacity
-                    style={styles.btnSave}
-                    onPress={runSelectionSort}
-                  >
-                    <Text style={styles.btnSaveText}>
-                      ⚙️ Jalankan Selection Sort
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-              )}
-
-              {algoTab === "insertion" && (
-                <View>
-                  <Text style={styles.cardDesc}>
-                    Urutkan semua destinasi dari jarak terdekat.
-                  </Text>
-                  <TouchableOpacity
-                    style={styles.btnSave}
-                    onPress={runInsertionSort}
-                  >
-                    <Text style={styles.btnSaveText}>
-                      ⚙️ Jalankan Insertion Sort
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-              )}
-
-              {/* Loading */}
-              {algoLoading && (
-                <ActivityIndicator
-                  size="small"
-                  color="#06b6d4"
-                  style={{ marginTop: 12 }}
-                />
-              )}
-
-              {/* Hasil pencarian */}
-              {algoResult && (
-                <View style={[styles.adminRow, { marginTop: 12 }]}>
-                  {algoResult.error ? (
-                    <Text style={{ color: "#ef4444", fontSize: 12 }}>
-                      ❌ Tidak dapat terhubung ke server.
-                    </Text>
-                  ) : algoResult.found ? (
-                    <View style={styles.adminRowInfo}>
-                      <Text style={styles.adminDestName}>
-                        ✅ {algoResult.data.name}
-                      </Text>
-                      <Text style={styles.adminDestLoc}>
-                        {algoResult.data.location} · {algoResult.data.category}
-                      </Text>
-                      <View style={{ flexDirection: "row", marginTop: 4 }}>
-                        <Text style={styles.adminStatBadge}>
-                          💵 {formatRupiah(algoResult.data.cost)}
-                        </Text>
-                        <Text
-                          style={[styles.adminStatBadge, { marginLeft: 8 }]}
-                        >
-                          📍 {algoResult.data.distance} km
-                        </Text>
-                      </View>
-                    </View>
-                  ) : (
-                    <Text style={{ color: "#f59e0b", fontSize: 12 }}>
-                      ⚠️ Destinasi tidak ditemukan.
-                    </Text>
-                  )}
-                </View>
-              )}
-
-              {/* Hasil sort */}
-              {sortedList.length > 0 && (
-                <View style={{ marginTop: 12 }}>
-                  <Text style={styles.cardDesc}>
-                    Hasil ({sortedList.length} destinasi):
-                  </Text>
-                  {sortedList.map((d, i) => (
-                    <View
-                      key={d.id}
-                      style={[styles.adminRow, { marginBottom: 6 }]}
-                    >
-                      <Text
-                        style={[styles.adminStatBadge, { marginRight: 10 }]}
-                      >
-                        #{i + 1}
-                      </Text>
-                      <View style={styles.adminRowInfo}>
-                        <Text style={styles.adminDestName}>{d.name}</Text>
-                        <View style={{ flexDirection: "row", marginTop: 2 }}>
-                          <Text style={styles.adminStatBadge}>
-                            💵 {formatRupiah(d.cost)}
-                          </Text>
-                          <Text
-                            style={[styles.adminStatBadge, { marginLeft: 6 }]}
-                          >
-                            📍 {d.distance} km
-                          </Text>
-                        </View>
-                      </View>
-                    </View>
-                  ))}
-                </View>
-              )}
-            </View>
+            {/* Algorithm Status Bar */}
+            {(processedDestinations.searchUsed || processedDestinations.sortUsed) ? (
+              <View style={styles.algoIndicatorBar}>
+                <Feather name="cpu" size={14} color="#06b6d4" style={{ marginRight: 6 }} />
+                <Text style={styles.algoIndicatorText}>
+                  {processedDestinations.searchUsed ? `Pencarian: ${processedDestinations.searchUsed}` : ""}
+                  {processedDestinations.searchUsed && processedDestinations.sortUsed ? "   |   " : ""}
+                  {processedDestinations.sortUsed ? `Pengurutan: ${processedDestinations.sortUsed}` : ""}
+                </Text>
+              </View>
+            ) : null}
 
             {/* LIST TITLE */}
             <View style={styles.sectionHeader}>
@@ -2149,5 +2076,21 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: "#fff",
     flex: 1,
+  },
+  algoIndicatorBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(6, 182, 212, 0.05)",
+    borderWidth: 1,
+    borderColor: "rgba(6, 182, 212, 0.15)",
+    borderRadius: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    marginBottom: 16,
+  },
+  algoIndicatorText: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: "#06b6d4",
   },
 });
