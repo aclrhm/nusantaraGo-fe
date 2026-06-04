@@ -618,7 +618,7 @@ export default function App() {
               {algoTab === "sequential" && (
                 <View>
                   <Text style={styles.cardDesc}>
-                    Mencari destinasi satu per satu dari awal (O(n)).
+                    Mencari destinasi satu per satu dari awal.
                   </Text>
                   <View style={styles.searchBox}>
                     <TextInput
@@ -641,7 +641,7 @@ export default function App() {
               {algoTab === "binary" && (
                 <View>
                   <Text style={styles.cardDesc}>
-                    Pencarian biner pada data terurut (O(log n)).
+                    Pencarian biner pada data terurut.
                   </Text>
                   <View style={styles.searchBox}>
                     <TextInput
@@ -664,8 +664,7 @@ export default function App() {
               {algoTab === "selection" && (
                 <View>
                   <Text style={styles.cardDesc}>
-                    Urutkan semua destinasi dari biaya termurah (Selection Sort
-                    O(n²)).
+                    Urutkan semua destinasi dari biaya termurah.
                   </Text>
                   <TouchableOpacity
                     style={styles.btnSave}
@@ -681,8 +680,7 @@ export default function App() {
               {algoTab === "insertion" && (
                 <View>
                   <Text style={styles.cardDesc}>
-                    Urutkan semua destinasi dari jarak terdekat (Insertion Sort
-                    O(n²)).
+                    Urutkan semua destinasi dari jarak terdekat.
                   </Text>
                   <TouchableOpacity
                     style={styles.btnSave}
